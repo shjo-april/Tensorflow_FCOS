@@ -50,6 +50,14 @@ def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, 
             x = tf.nn.relu(x, name = 'relu')
     return x
 
+def connection_block(x1, x2, is_training, scope):
+    with tf.variable_scope(scope):
+        x1 = conv_bn_relu(x1, 256, [3, 3], 1, 'same', is_training, 'conv1', gn = True, activation = False)
+        x2 = conv_bn_relu(x2, 256, [1, 1], 1, 'valid', is_training, 'conv2', gn = True, activation = False)
+
+        x = tf.nn.relu(x1 + x2, name = 'relu')
+    return x
+
 def build_head_loc(x, is_training, name, depth = 4):
     with tf.variable_scope(name):
         for i in range(depth):
@@ -100,11 +108,11 @@ def FCOS_ResNet_50(input_var, is_training, reuse = False):
         pyramid_dic['P7'] = x
 
         x = conv_bn_relu(pyramid_dic['P5'], 256, (3, 3), 2, 'same', is_training, 'P4_conv_1', upscaling = True)
-        x += conv_bn_relu(pyramid_dic['C4'], 256, (1, 1), 1, 'valid', is_training, 'P4_conv_2')
+        x = connection_block(x, pyramid_dic['C4'], is_training, 'P4_conv')
         pyramid_dic['P4'] = x
 
         x = conv_bn_relu(pyramid_dic['P4'], 256, (3, 3), 2, 'same', is_training, 'P3_conv_1', upscaling = True)
-        x += conv_bn_relu(pyramid_dic['C3'], 256, (1, 1), 1, 'valid', is_training, 'P3_conv_2')
+        x = connection_block(x, pyramid_dic['C3'], is_training, 'P3_conv')
         pyramid_dic['P3'] = x
         
         '''

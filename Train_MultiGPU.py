@@ -16,13 +16,11 @@ from Utils import *
 # from Teacher import *
 from DataAugmentation import *
 
-from DSSD import *
-from DSSD_Loss import *
-from DSSD_Utils import *
+from FCOS import *
+from FCOS_Loss import *
+from FCOS_Utils import *
 
-NUM_GPU = 2
-BATCH_SIZE *= NUM_GPU
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
 # 1. dataset
 train_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/train.txt', 'r').readlines()]
@@ -48,16 +46,13 @@ for gpu_id in range(NUM_GPU):
     with tf.device(tf.DeviceSpec(device_type = "GPU", device_index = gpu_id)):
         with tf.variable_scope(tf.get_variable_scope(), reuse = reuse):
             print(input_vars[gpu_id], is_training, reuse)
-            dssd_dic, dssd_sizes = DSSD(input_vars[gpu_id], is_training, reuse)
 
+            fcos_dic, fcos_sizes = FCOS(input_var, is_training)
             if not reuse:
-                anchors = generate_anchors(dssd_sizes, [IMAGE_WIDTH, IMAGE_HEIGHT], ANCHOR_SCALES, ANCHOR_RATIOS)
+                fcos_utils = FCOS_Utils(fcos_sizes)
 
-            pred_bboxes_op = Decode_Layer(dssd_dic['pred_bboxes'], anchors)
-            pred_classes_op = dssd_dic['pred_classes']
-            
-            pred_bboxes_ops.append(pred_bboxes_op)
-            pred_classes_ops.append(pred_classes_op)
+            pred_bboxes_ops.append(fcos_dic['pred_bboxes'])
+            pred_classes_ops.append(fcos_dic['pred_classes'])
 
 pred_bboxes_op = tf.concat(pred_bboxes_ops, axis = 0)
 pred_classes_op = tf.concat(pred_classes_ops, axis = 0)
@@ -84,7 +79,6 @@ summary_op = tf.summary.merge_all()
 
 learning_rate_var = tf.placeholder(tf.float32)
 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-    # train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
     train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
 
 # 3. train
@@ -206,13 +200,10 @@ for iter in range(1, max_iteration + 1):
         train_time = time.time()
 
     if iter % VALID_ITERATION == 0:
-        ap_threshold = 0.5
-        nms_threshold = 0.6
-
         correct_dic = {}
         confidence_dic = {}
         all_ground_truths_dic = {}
-
+        
         for class_name in CLASS_NAMES:
             correct_dic[class_name] = []
             confidence_dic[class_name] = []
@@ -236,7 +227,7 @@ for iter in range(1, max_iteration + 1):
 
             # calculate correct/confidence
             if len(batch_image_data) == BATCH_SIZE:
-                encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data})
+                decode_bboxes, decode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
 
                 for i in range(BATCH_SIZE):
                     gt_bboxes_dic = batch_gt_bboxes_dic[i]
@@ -245,18 +236,13 @@ for iter in range(1, max_iteration + 1):
 
                         gt_class = CLASS_DIC[class_name]
                         all_ground_truths_dic[class_name] += gt_bboxes.shape[0]
-
-                        pred_bboxes = encode_bboxes[i, :, :]
-                        pred_classes = encode_classes[i, :, gt_class][..., np.newaxis]
-                        pred_bboxes = np.concatenate((pred_bboxes, pred_classes), axis = -1)
-
-                        pred_bboxes[:, :4] = convert_bboxes(pred_bboxes[:, :4], img_wh = batch_image_wh[i])
-                        pred_bboxes = nms(pred_bboxes, nms_threshold)
+                        
+                        pred_bboxes = fcos_utils.Decode(decode_bboxes[i], decode_classes[i], batch_image_wh[i], find_class = gt_class, nms = True)
 
                         ious = compute_bboxes_IoU(pred_bboxes, gt_bboxes)
 
                         # ious >= 0.50 (AP@50)
-                        correct = np.max(ious, axis = 1) >= ap_threshold
+                        correct = np.max(ious, axis = 1) >= AP_THRESHOLD
                         confidence = pred_bboxes[:, 4]
 
                         correct_dic[class_name] += correct.tolist()
@@ -268,34 +254,7 @@ for iter in range(1, max_iteration + 1):
 
             sys.stdout.write('\r# Validation = {:.2f}%'.format(valid_iter / valid_xml_count * 100))
             sys.stdout.flush()
-
-        if len(batch_image_data) != 0:
-            encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data})
-
-            for i in range(len(batch_image_data)):
-                gt_bboxes_dic = batch_gt_bboxes_dic[i]
-                for class_name in list(gt_bboxes_dic.keys()):
-                    gt_bboxes = np.asarray(gt_bboxes_dic[class_name], dtype = np.float32)
-
-                    gt_class = CLASS_DIC[class_name]
-                    all_ground_truths_dic[class_name] += gt_bboxes.shape[0]
-
-                    pred_bboxes = encode_bboxes[i, :, :]
-                    pred_classes = encode_classes[i, :, gt_class][..., np.newaxis]
-                    pred_bboxes = np.concatenate((pred_bboxes, pred_classes), axis = -1)
-
-                    pred_bboxes[:, :4] = convert_bboxes(pred_bboxes[:, :4], img_wh = batch_image_wh[i])
-                    pred_bboxes = nms(pred_bboxes, nms_threshold)
-
-                    ious = compute_bboxes_IoU(pred_bboxes, gt_bboxes)
-
-                    # ious >= 0.50 (AP@50)
-                    correct = np.max(ious, axis = 1) >= ap_threshold
-                    confidence = pred_bboxes[:, 4]
-
-                    correct_dic[class_name] += correct.tolist()
-                    confidence_dic[class_name] += confidence.tolist()
-
+            
         valid_time = int(time.time() - valid_time)
         print('\n[i] valid time = {}sec'.format(valid_time))
 
@@ -361,8 +320,8 @@ for iter in range(1, max_iteration + 1):
         valid_mAP = np.mean(valid_mAP_list)
         if best_valid_mAP < valid_mAP:
             best_valid_mAP = valid_mAP
-            saver.save(sess, './model/DSSD_{}.ckpt'.format(iter))
+            saver.save(sess, './model/FCOS_{}.ckpt'.format(iter))
             
         log_print('[i] valid mAP : {:.6f}, best valid mAP : {:.6f}'.format(valid_mAP, best_valid_mAP))
 
-saver.save(sess, './model/DSSD.ckpt')
+saver.save(sess, './model/FCOS.ckpt')

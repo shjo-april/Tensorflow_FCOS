@@ -332,8 +332,8 @@ for iter in range(1, max_iteration + 1):
         valid_mAP = np.mean(valid_mAP_list)
         if best_valid_mAP < valid_mAP:
             best_valid_mAP = valid_mAP
-            saver.save(sess, './model/DSSD_{}.ckpt'.format(iter))
+            saver.save(sess, './model/FCOS_{}.ckpt'.format(iter))
             
         log_print('[i] valid mAP : {:.6f}, best valid mAP : {:.6f}'.format(valid_mAP, best_valid_mAP))
 
-saver.save(sess, './model/DSSD.ckpt')
+saver.save(sess, './model/FCOS.ckpt')
