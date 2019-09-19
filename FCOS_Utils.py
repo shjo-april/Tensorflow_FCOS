@@ -40,7 +40,9 @@ class FCOS_Utils:
         total_decode_bboxes = np.zeros((0, 4), dtype = np.float32)
         total_decode_classes = np.zeros((0, CLASSES), dtype = np.float32)
 
-        for size in self.sizes:
+        m_indexs = np.arange(3, 7 + 1)
+
+        for index, size in zip(m_indexs, self.sizes):
             w, h = size
             decode_bboxes = np.zeros([h, w, 4], dtype = np.float32)
             decode_classes = np.zeros([h, w, CLASSES], dtype = np.float32)
@@ -49,13 +51,19 @@ class FCOS_Utils:
 
             for gt_bbox, gt_class in zip(gt_bboxes, gt_classes):
                 xmin, ymin, xmax, ymax = gt_bbox
+                
                 center_x, center_y = (xmin + xmax) / 2, (ymin + ymax) / 2
+                width, height = xmax - xmin, ymax - ymin
 
-                grid_x = int(center_x / IMAGE_WIDTH * w)
-                grid_y = int(center_y / IMAGE_HEIGHT * h)
+                bbox_size = max(width, height)
+                # print(bbox_size, M_LIST[index - 1], M_LIST[index])
 
-                decode_bboxes[grid_y, grid_x, :] = gt_bbox
-                decode_classes[grid_y, grid_x, :] = one_hot(gt_class)
+                if bbox_size >= M_LIST[index - 1] and bbox_size <= M_LIST[index]:
+                    grid_x = int(center_x / IMAGE_WIDTH * w)
+                    grid_y = int(center_y / IMAGE_HEIGHT * h)
+
+                    decode_bboxes[grid_y, grid_x, :] = gt_bbox
+                    decode_classes[grid_y, grid_x, :] = one_hot(gt_class)
 
             decode_bboxes = decode_bboxes.reshape((-1, 4))
             decode_classes = decode_classes.reshape((-1, CLASSES))
@@ -65,36 +73,77 @@ class FCOS_Utils:
 
         return total_decode_bboxes, total_decode_classes
 
-    def Decode(self, decode_bboxes, decode_classes, image_wh, find_class = None, detect_threshold = 0.05, use_nms = False):
-        # pred_bboxes = [?, 6]
-        if find_class is None:
-            total_class_probs = np.max(decode_classes, axis = -1)
-            total_class_indexs = np.argmax(decode_classes, axis = -1)
+    def Encode_Debug(self, gt_bboxes, gt_classes):
+        info_list = []
 
-            cond = total_class_indexs > 0
+        total_decode_bboxes = np.zeros((0, 4), dtype = np.float32)
+        total_decode_classes = np.zeros((0, CLASSES), dtype = np.float32)
 
-            pred_bboxes = decode_bboxes[cond]
-            class_probs = total_class_probs[cond][..., np.newaxis]
-            class_indexs = total_class_indexs[cond][..., np.newaxis]
-            
-            pred_bboxes = np.concatenate((pred_bboxes, class_probs, class_indexs), axis = -1)
-        # pred_bboxes = [?, 5]
-        else:
-            total_class_probs = decode_classes[:, find_class]
-            
-            cond = total_class_probs >= detect_threshold
-            
-            pred_bboxes = decode_bboxes[cond]
-            class_probs = total_class_probs[cond][..., np.newaxis]
+        m_indexs = np.arange(3, 7 + 1)
 
-            pred_bboxes = np.concatenate((pred_bboxes, class_probs), axis = -1)
+        for index, size in zip(m_indexs, self.sizes):
+            w, h = size
+            decode_bboxes = np.zeros([h, w, 4], dtype = np.float32)
+            decode_classes = np.zeros([h, w, CLASSES], dtype = np.float32)
+
+            decode_classes[:, :, 0] = 1.
+
+            for gt_bbox, gt_class in zip(gt_bboxes, gt_classes):
+                xmin, ymin, xmax, ymax = gt_bbox
+                
+                center_x, center_y = (xmin + xmax) / 2, (ymin + ymax) / 2
+                width, height = xmax - xmin, ymax - ymin
+
+                bbox_size = max(width, height)
+                # print(bbox_size, M_LIST[index - 1], M_LIST[index])
+
+                if bbox_size >= M_LIST[index - 1] and bbox_size <= M_LIST[index]:
+                    grid_x = int(center_x / IMAGE_WIDTH * w)
+                    grid_y = int(center_y / IMAGE_HEIGHT * h)
+
+                    grid_cx = (grid_x + 0.5) / w * IMAGE_WIDTH
+                    grid_cy = (grid_y + 0.5) / h * IMAGE_HEIGHT
+
+                    l = grid_cx - xmin
+                    t = grid_cy - ymin
+                    r = xmax - grid_cx
+                    b = ymax - grid_cy
+
+                    lr_center_ness = min(l, r) / max(max(l, r), 1e-12)
+                    tb_center_ness = min(t, b) / max(max(t, b), 1e-12)
+                    center_ness = np.sqrt(lr_center_ness * tb_center_ness)
+
+                    info_list.append([grid_cx, grid_cy, l, t, r, b, center_ness])
+                    
+                    decode_bboxes[grid_y, grid_x, :] = gt_bbox
+                    decode_classes[grid_y, grid_x, :] = one_hot(gt_class)
+
+            decode_bboxes = decode_bboxes.reshape((-1, 4))
+            decode_classes = decode_classes.reshape((-1, CLASSES))
+
+            total_decode_bboxes = np.append(total_decode_bboxes, decode_bboxes, axis = 0)
+            total_decode_classes = np.append(total_decode_classes, decode_classes, axis = 0)
+
+        return total_decode_bboxes, total_decode_classes, info_list
+
+    def Decode(self, decode_bboxes, decode_classes, image_wh, detect_threshold = 0.05, use_nms = False):
+        total_class_probs = np.max(decode_classes[:, 1:], axis = -1)
+        total_class_indexs = np.argmax(decode_classes[:, 1:], axis = -1)
+
+        cond = total_class_probs >= detect_threshold
+            
+        pred_bboxes = decode_bboxes[cond]
+        class_probs = total_class_probs[cond][..., np.newaxis]
+        
+        pred_bboxes = np.concatenate((pred_bboxes, class_probs), axis = -1)
+        pred_classes = total_class_indexs[cond] + 1
 
         pred_bboxes[:, :4] = convert_bboxes(pred_bboxes[:, :4], image_wh = image_wh)
 
         if use_nms:
-            pred_bboxes = nms(pred_bboxes, NMS_THRESHOLD)
+            pred_bboxes, pred_classes = class_nms(pred_bboxes, pred_classes)
 
-        return pred_bboxes
+        return pred_bboxes.astype(np.float32), pred_classes.astype(np.int32)
 
 if __name__ == '__main__':
     import cv2
@@ -105,7 +154,7 @@ if __name__ == '__main__':
     
     # 1. Test GT bboxes (Encode -> Decode)
     fcos_utils = FCOS_Utils(fcos_sizes)
-    xml_paths = glob.glob('D:/_DeepLearning_DB/VOC2007/train/xml/*.xml')
+    xml_paths = glob.glob('D:/DB/VOC2007/train/xml/*.xml')
     
     for xml_path in xml_paths:
         image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = True)
@@ -113,17 +162,32 @@ if __name__ == '__main__':
         image = cv2.imread(image_path)
         h, w, c = image.shape
         
-        decode_bboxes, decode_classes = fcos_utils.Encode(gt_bboxes, gt_classes)
+        decode_bboxes, decode_classes, info_list = fcos_utils.Encode_Debug(gt_bboxes, gt_classes)
         positive_count = np.sum(decode_classes[:, 1:])
         print(positive_count, decode_classes.shape)
-
-        pred_bboxes = fcos_utils.Decode(decode_bboxes, decode_classes, [w, h], use_nms = True)
-        print(pred_bboxes.shape)
         
-        for pred_bbox in pred_bboxes:
+        pred_bboxes, pred_classes = fcos_utils.Decode(decode_bboxes, decode_classes, [w, h], use_nms = True)
+        print(pred_bboxes.shape, pred_classes.shape)
+
+        # center info
+        for info in info_list:
+            data = np.asarray(info[:-1]).reshape((-1, 2)) / [IMAGE_WIDTH, IMAGE_HEIGHT] * [w, h]
+            grid_cx, grid_cy, l, t, r, b = data.reshape(-1).astype(np.int32)
+
+            center_ness = info[-1]
+            
+            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx - l, grid_cy), (255, 0, 128), 1)
+            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx + r, grid_cy), (255, 0, 128), 1)
+            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx, grid_cy - t), (255, 0, 128), 1)
+            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx, grid_cy + b), (255, 0, 128), 1)
+            cv2.circle(image, (grid_cx, grid_cy), 1, (0, 0, 255), 2)
+
+            cv2.putText(image, 'center = {:.2f}'.format(center_ness), (grid_cx - 10, grid_cy - 10), 1, 1, (0, 0, 255), 2)
+        
+        for pred_bbox, pred_class in zip(pred_bboxes, pred_classes):
             xmin, ymin, xmax, ymax = pred_bbox[:4].astype(np.int32)
             confidence = pred_bbox[4] * 100
-            class_name = CLASS_NAMES[int(pred_bbox[5])]
+            class_name = CLASS_NAMES[pred_class]
 
             cv2.putText(image, '{} = {:.2f}%'.format(class_name, confidence), (xmin, ymin - 10), 1, 1, (0, 255, 0), 1)
             cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 1)

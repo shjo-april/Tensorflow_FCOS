@@ -41,7 +41,7 @@ fcos_utils = FCOS_Utils(fcos_sizes)
 pred_bboxes_op = fcos_dic['pred_bboxes']
 pred_classes_op = fcos_dic['pred_classes']
 
-_, fcos_size, _ = pred_bboxes.shape.as_list()
+_, fcos_size, _ = pred_bboxes_op.shape.as_list()
 gt_bboxes_var = tf.placeholder(tf.float32, [None, fcos_size, 4])
 gt_classes_var = tf.placeholder(tf.float32, [None, fcos_size, CLASSES])
 
@@ -65,6 +65,7 @@ summary_op = tf.summary.merge_all()
 learning_rate_var = tf.placeholder(tf.float32)
 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
     train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op)
+    # train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op)
 
 # 3. train
 sess = tf.Session()
@@ -91,6 +92,10 @@ valid_iteration = len(valid_xml_paths) // BATCH_SIZE
 
 max_iteration = train_iteration * MAX_EPOCH
 decay_iteration = np.asarray([0.5 * max_iteration, 0.75 * max_iteration], dtype = np.int32)
+
+## batch size = 16 (2 images per gpu)
+# max_iteration = 90000
+# decay_iteration = [60000, 80000]
 
 log_print('[i] max_iteration : {}'.format(max_iteration))
 log_print('[i] decay_iteration : {}'.format(decay_iteration))
@@ -145,11 +150,11 @@ for iter in range(1, max_iteration + 1):
         # delay = time.time() - delay
         # print('[D] {} = {}ms'.format('xml', int(delay * 1000))) # ~ 41ms
 
-        encode_bboxes, encode_classes = Encode(gt_bboxes, gt_classes, anchors)
+        gt_bboxes, gt_classes = fcos_utils.Encode(gt_bboxes, gt_classes)
 
         batch_image_data.append(image.astype(np.float32))
-        batch_gt_bboxes.append(encode_bboxes)
-        batch_gt_classes.append(encode_classes)
+        batch_gt_bboxes.append(gt_bboxes)
+        batch_gt_classes.append(gt_classes)
 
     batch_image_data = np.asarray(batch_image_data, dtype = np.float32) 
     batch_gt_bboxes = np.asarray(batch_gt_bboxes, dtype = np.float32)
@@ -222,7 +227,10 @@ for iter in range(1, max_iteration + 1):
                         gt_class = CLASS_DIC[class_name]
                         all_ground_truths_dic[class_name] += gt_bboxes.shape[0]
                         
-                        pred_bboxes = fcos_utils.Decode(decode_bboxes[i], decode_classes[i], batch_image_wh[i], find_class = gt_class, nms = True)
+                        pred_bboxes = fcos_utils.Decode(decode_bboxes[i], decode_classes[i], batch_image_wh[i], find_class = gt_class, use_nms = True)
+
+                        if pred_bboxes.shape[0] == 0:
+                            pred_bboxes = np.zeros((1, 5), dtype = np.float32)
 
                         ious = compute_bboxes_IoU(pred_bboxes, gt_bboxes)
 
@@ -251,17 +259,15 @@ for iter in range(1, max_iteration + 1):
                     gt_class = CLASS_DIC[class_name]
                     all_ground_truths_dic[class_name] += gt_bboxes.shape[0]
 
-                    pred_bboxes = encode_bboxes[i, :, :]
-                    pred_classes = encode_classes[i, :, gt_class][..., np.newaxis]
-                    pred_bboxes = np.concatenate((pred_bboxes, pred_classes), axis = -1)
+                    pred_bboxes = fcos_utils.Decode(decode_bboxes[i], decode_classes[i], batch_image_wh[i], find_class = gt_class, nms = True)
 
-                    pred_bboxes[:, :4] = convert_bboxes(pred_bboxes[:, :4], img_wh = batch_image_wh[i])
-                    pred_bboxes = nms(pred_bboxes, nms_threshold)
+                    if pred_bboxes.shape[0] == 0:
+                        pred_bboxes = np.zeros((1, 5), dtype = np.float32)
 
                     ious = compute_bboxes_IoU(pred_bboxes, gt_bboxes)
 
                     # ious >= 0.50 (AP@50)
-                    correct = np.max(ious, axis = 1) >= ap_threshold
+                    correct = np.max(ious, axis = 1) >= AP_THRESHOLD
                     confidence = pred_bboxes[:, 4]
 
                     correct_dic[class_name] += correct.tolist()
@@ -274,11 +280,10 @@ for iter in range(1, max_iteration + 1):
         for class_name in CLASS_NAMES:
             if all_ground_truths_dic[class_name] == 0:
                 continue
-
-            all_ground_truths = all_ground_truths_dic[class_name]
             
             correct_list = correct_dic[class_name]
             confidence_list = confidence_dic[class_name]
+            all_ground_truths = np.sum(correct_list)
 
             # list -> numpy
             confidence_list = np.asarray(confidence_list, dtype = np.float32)

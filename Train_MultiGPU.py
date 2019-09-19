@@ -13,21 +13,21 @@ import tensorflow as tf
 
 from Define import *
 from Utils import *
-# from Teacher import *
 from DataAugmentation import *
+from mAP_Calculator import *
 
 from FCOS import *
 from FCOS_Loss import *
 from FCOS_Utils import *
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
 # 1. dataset
 train_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/train.txt', 'r').readlines()]
 valid_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/valid.txt', 'r').readlines()]
 valid_xml_count = len(valid_xml_paths)
 
-open('log.txt', 'w')
+# open('log.txt', 'w')
 log_print('[i] Train : {}'.format(len(train_xml_paths)))
 log_print('[i] Valid : {}'.format(len(valid_xml_paths)))
 
@@ -47,7 +47,7 @@ for gpu_id in range(NUM_GPU):
         with tf.variable_scope(tf.get_variable_scope(), reuse = reuse):
             print(input_vars[gpu_id], is_training, reuse)
 
-            fcos_dic, fcos_sizes = FCOS(input_var, is_training)
+            fcos_dic, fcos_sizes = FCOS(input_vars[gpu_id], is_training)
             if not reuse:
                 fcos_utils = FCOS_Utils(fcos_sizes)
 
@@ -57,15 +57,16 @@ for gpu_id in range(NUM_GPU):
 pred_bboxes_op = tf.concat(pred_bboxes_ops, axis = 0)
 pred_classes_op = tf.concat(pred_classes_ops, axis = 0)
 
-gt_bboxes_var = tf.placeholder(tf.float32, [BATCH_SIZE, anchors.shape[0], 4])
-gt_classes_var = tf.placeholder(tf.float32, [BATCH_SIZE, anchors.shape[0], CLASSES])
+_, fcos_size, _ = pred_bboxes_op.shape.as_list()
+gt_bboxes_var = tf.placeholder(tf.float32, [BATCH_SIZE, fcos_size, 4])
+gt_classes_var = tf.placeholder(tf.float32, [BATCH_SIZE, fcos_size, CLASSES])
 
 log_print('[i] pred_bboxes_op : {}'.format(pred_bboxes_op))
 log_print('[i] pred_classes_op : {}'.format(pred_classes_op))
 log_print('[i] gt_bboxes_var : {}'.format(gt_bboxes_var))
 log_print('[i] gt_classes_var : {}'.format(gt_classes_var))
 
-loss_op, focal_loss_op, giou_loss_op = SSD_Loss(pred_bboxes_op, pred_classes_op, gt_bboxes_var, gt_classes_var)
+loss_op, focal_loss_op, giou_loss_op = FCOS_Loss(pred_bboxes_op, pred_classes_op, gt_bboxes_var, gt_classes_var)
 
 vars = tf.trainable_variables()
 l2_reg_loss_op = tf.add_n([tf.nn.l2_loss(var) for var in vars]) * WEIGHT_DECAY
@@ -80,12 +81,13 @@ summary_op = tf.summary.merge_all()
 learning_rate_var = tf.placeholder(tf.float32)
 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
     train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
+    # train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op, colocate_gradients_with_ops = True)
 
 # 3. train
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-# '''
+'''
 pretrained_vars = []
 for var in vars:
     if 'resnet_v2_50' in var.name:
@@ -93,10 +95,10 @@ for var in vars:
 
 pretrained_saver = tf.train.Saver(var_list = pretrained_vars)
 pretrained_saver.restore(sess, './resnet_v2_model/resnet_v2_50.ckpt')
-# '''
+'''
 
 saver = tf.train.Saver()
-# saver.restore(sess, './model/SSD_ResNet_v2_{}.ckpt'.format(30000))
+saver.restore(sess, './model/FCOS_{}.ckpt'.format(115000))
 
 best_valid_mAP = 0.0
 learning_rate = INIT_LEARNING_RATE
@@ -118,26 +120,10 @@ train_time = time.time()
 
 train_writer = tf.summary.FileWriter('./logs/train')
 
-# train_threads = []
-# for i in range(5):
-#     train_thread = Teacher(train_xml_paths, anchors, max_data_size = 20, debug = True)
-#     train_thread.start()
-#     train_threads.append(train_thread)
-# input()
-
-for iter in range(1, max_iteration + 1):
+for iter in range(1 + 115000, max_iteration + 1):
     if iter in decay_iteration:
         learning_rate /= 10
         log_print('[i] learning rate decay : {} -> {}'.format(learning_rate * 10, learning_rate))
-
-    ## Teacher (Thread)
-    # find = False
-    # while not find:
-    #     for train_thread in train_threads:
-    #         if train_thread.ready:
-    #             find = True
-    #             batch_image_data, batch_gt_bboxes, batch_gt_classes = train_thread.get_batch_data()        
-    #             break
 
     ## Default
     batch_image_data = []
@@ -160,11 +146,11 @@ for iter in range(1, max_iteration + 1):
         # delay = time.time() - delay
         # print('[D] {} = {}ms'.format('xml', int(delay * 1000))) # ~ 41ms
 
-        encode_bboxes, encode_classes = Encode(gt_bboxes, gt_classes, anchors)
+        gt_bboxes, gt_classes = fcos_utils.Encode(gt_bboxes, gt_classes)
 
         batch_image_data.append(image.astype(np.float32))
-        batch_gt_bboxes.append(encode_bboxes)
-        batch_gt_classes.append(encode_classes)
+        batch_gt_bboxes.append(gt_bboxes)
+        batch_gt_classes.append(gt_classes)
 
     batch_image_data = np.asarray(batch_image_data, dtype = np.float32) 
     batch_gt_bboxes = np.asarray(batch_gt_bboxes, dtype = np.float32)
@@ -200,121 +186,56 @@ for iter in range(1, max_iteration + 1):
         train_time = time.time()
 
     if iter % VALID_ITERATION == 0:
-        correct_dic = {}
-        confidence_dic = {}
-        all_ground_truths_dic = {}
-        
-        for class_name in CLASS_NAMES:
-            correct_dic[class_name] = []
-            confidence_dic[class_name] = []
-            all_ground_truths_dic[class_name] = 0.
-
-        batch_image_data = []
-        batch_image_wh = []
-        batch_gt_bboxes_dic = []
+        mAP_calc = mAP_Calculator(classes = CLASSES)
 
         valid_time = time.time()
 
+        batch_image_data = []
+        batch_image_wh = []
+
+        batch_gt_bboxes = []
+        batch_gt_classes = []
+
         for valid_iter, xml_path in enumerate(valid_xml_paths):
-            image_path, gt_bboxes_dic = class_xml_read(xml_path, CLASS_NAMES)
+            image_path, gt_bboxes, gt_classes = xml_read(xml_path, CLASS_NAMES)
 
             ori_image = cv2.imread(image_path)
             image = cv2.resize(ori_image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
             
             batch_image_data.append(image.astype(np.float32))
             batch_image_wh.append(ori_image.shape[:-1][::-1])
-            batch_gt_bboxes_dic.append(gt_bboxes_dic)
+
+            batch_gt_bboxes.append(gt_bboxes)
+            batch_gt_classes.append(gt_classes)
 
             # calculate correct/confidence
             if len(batch_image_data) == BATCH_SIZE:
                 decode_bboxes, decode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
 
                 for i in range(BATCH_SIZE):
-                    gt_bboxes_dic = batch_gt_bboxes_dic[i]
-                    for class_name in list(gt_bboxes_dic.keys()):
-                        gt_bboxes = np.asarray(gt_bboxes_dic[class_name], dtype = np.float32)
+                    gt_bboxes, gt_classes = batch_gt_bboxes[i], batch_gt_classes[i]
+                    pred_bboxes, pred_classes = fcos_utils.Decode(decode_bboxes[i], decode_classes[i], batch_image_wh[i], detect_threshold = 0.01, use_nms = True)
 
-                        gt_class = CLASS_DIC[class_name]
-                        all_ground_truths_dic[class_name] += gt_bboxes.shape[0]
-                        
-                        pred_bboxes = fcos_utils.Decode(decode_bboxes[i], decode_classes[i], batch_image_wh[i], find_class = gt_class, nms = True)
+                    if pred_bboxes.shape[0] == 0:
+                        pred_bboxes = np.zeros((0, 5), dtype = np.float32)
 
-                        ious = compute_bboxes_IoU(pred_bboxes, gt_bboxes)
-
-                        # ious >= 0.50 (AP@50)
-                        correct = np.max(ious, axis = 1) >= AP_THRESHOLD
-                        confidence = pred_bboxes[:, 4]
-
-                        correct_dic[class_name] += correct.tolist()
-                        confidence_dic[class_name] += confidence.tolist()
-
+                    mAP_calc.update(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
+                
                 batch_image_data = []
                 batch_image_wh = []
-                batch_gt_bboxes_dic = []
 
+                batch_gt_bboxes = []
+                batch_gt_classes = []
+            
             sys.stdout.write('\r# Validation = {:.2f}%'.format(valid_iter / valid_xml_count * 100))
             sys.stdout.flush()
-            
+
         valid_time = int(time.time() - valid_time)
-        print('\n[i] valid time = {}sec'.format(valid_time))
+        print('\n[i] Validation time = {}sec'.format(valid_time))
 
         valid_mAP_list = []
-        for class_name in CLASS_NAMES:
-            if all_ground_truths_dic[class_name] == 0:
-                continue
-
-            all_ground_truths = all_ground_truths_dic[class_name]
-            
-            correct_list = correct_dic[class_name]
-            confidence_list = confidence_dic[class_name]
-
-            # list -> numpy
-            confidence_list = np.asarray(confidence_list, dtype = np.float32)
-            correct_list = np.asarray(correct_list, dtype = np.bool)
-            
-            # Ascending (confidence)
-            sort_indexs = confidence_list.argsort()[::-1]
-            confidence_list = confidence_list[sort_indexs]
-            correct_list = correct_list[sort_indexs]
-            
-            correct_detections = 0
-            all_detections = 0
-
-            # calculate precision/recall
-            precision_list = []
-            recall_list = []
-
-            for confidence, correct in zip(confidence_list, correct_list):
-                all_detections += 1
-                if correct:
-                    correct_detections += 1    
-                
-                precision = correct_detections / all_detections
-                recall = correct_detections / all_ground_truths
-                
-                precision_list.append(precision)
-                recall_list.append(recall)
-
-                # maximum correct detections
-                if recall == 1.0:
-                    break
-
-            precision_list = np.asarray(precision_list, dtype = np.float32)
-            recall_list = np.asarray(recall_list, dtype = np.float32)
-            
-            # calculating the interpolation performed in 11 points (0.0 -> 1.0, +0.01)
-            precision_interp_list = []
-            interp_list = np.arange(0, 10 + 1) / 10
-
-            for interp in interp_list:
-                try:
-                    precision_interp = max(precision_list[recall_list >= interp])
-                except:
-                    precision_interp = 0.0
-                
-                precision_interp_list.append(precision_interp)
-
-            ap = np.mean(precision_interp_list) * 100
+        for i, class_name in enumerate(CLASS_NAMES):
+            ap, precisions, recalls, interp_list, precision_interp_list = mAP_calc.compute_precision_recall(i)
             valid_mAP_list.append(ap)
 
         valid_mAP = np.mean(valid_mAP_list)

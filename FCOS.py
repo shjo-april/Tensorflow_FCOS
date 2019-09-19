@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import tensorflow as tf
 
@@ -5,7 +7,8 @@ import resnet_v2.resnet_v2 as resnet_v2
 
 from Define import *
 
-initializer = tf.contrib.layers.xavier_initializer()
+# initializer = tf.contrib.layers.xavier_initializer()
+initializer = tf.contrib.layers.variance_scaling_initializer()
 
 def group_normalization(x, is_training, G = 32, ESP = 1e-5, scope = 'group_norm'):
     with tf.variable_scope(scope):
@@ -45,7 +48,7 @@ def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, 
         
         if gn:
             x = group_normalization(x, is_training = is_training, scope = 'gn')
-
+        
         if activation:
             x = tf.nn.relu(x, name = 'relu')
     return x
@@ -54,7 +57,6 @@ def connection_block(x1, x2, is_training, scope):
     with tf.variable_scope(scope):
         x1 = conv_bn_relu(x1, 256, [3, 3], 1, 'same', is_training, 'conv1', gn = True, activation = False)
         x2 = conv_bn_relu(x2, 256, [1, 1], 1, 'valid', is_training, 'conv2', gn = True, activation = False)
-
         x = tf.nn.relu(x1 + x2, name = 'relu')
     return x
 
@@ -62,6 +64,7 @@ def build_head_loc(x, is_training, name, depth = 4):
     with tf.variable_scope(name):
         for i in range(depth):
             x = conv_bn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
+
         x = conv_bn_relu(x, 4, (3, 3), 1, 'same', is_training, 'loc', gn = False, activation = False)
     return x
 
@@ -69,7 +72,8 @@ def build_head_cls(x, is_training, name, depth = 4):
     with tf.variable_scope(name):
         for i in range(depth):
             x = conv_bn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
-        x = conv_bn_relu(x, CLASSES, (3, 3), 1, 'same', is_training, 'cls', gn = False, activation = False)
+
+        x = tf.layers.conv2d(inputs = x, filters = CLASSES, kernel_size = [3, 3], strides = 1, padding = 'same', kernel_initializer = initializer, bias_initializer = tf.constant_initializer(-math.log((1 - 0.01) / 0.01)), name = 'conv')
     return x
 
 def FCOS_ResNet_50(input_var, is_training, reuse = False):
@@ -137,29 +141,34 @@ def FCOS_ResNet_50(input_var, is_training, reuse = False):
             _pred_classes = build_head_cls(feature_map, is_training, 'P{}_classes'.format(i))
 
             # parsing (l*, t*, r*, b*)
-            # print('P{}'.format(i), M_LIST[i - 1], M_LIST[i])
-            l = tf.clip_by_value(tf.exp(_pred_bboxes[:, :, :, 0]), M_LIST[i - 1], M_LIST[i])
-            t = tf.clip_by_value(tf.exp(_pred_bboxes[:, :, :, 1]), M_LIST[i - 1], M_LIST[i])
-            r = tf.clip_by_value(tf.exp(_pred_bboxes[:, :, :, 2]), M_LIST[i - 1], M_LIST[i])
-            b = tf.clip_by_value(tf.exp(_pred_bboxes[:, :, :, 3]), M_LIST[i - 1], M_LIST[i])
+            _pred_bboxes = tf.exp(_pred_bboxes)
+            l = _pred_bboxes[:, :, :, 0]
+            t = _pred_bboxes[:, :, :, 1]
+            r = _pred_bboxes[:, :, :, 2]
+            b = _pred_bboxes[:, :, :, 3]
 
-            # generate centers (shape = [w, h, 2])
-            xs = tf.range(w, dtype = tf.float32) + 0.5
-            ys = tf.range(h, dtype = tf.float32) + 0.5
+            # generate center_xys (shape = [w, h, 2])
+            xs = (tf.range(w, dtype = tf.float32) + 0.5)
+            ys = (tf.range(h, dtype = tf.float32) + 0.5)
 
             xs, ys = tf.meshgrid(xs, ys)
             center_xys = tf.concat([xs[..., tf.newaxis], ys[..., tf.newaxis]], axis = -1)
-
+            
             # calculate xmin, ymin, xmax, ymax
-            xmin = center_xys[..., 0] - l
-            ymin = center_xys[..., 1] - t
-            xmax = center_xys[..., 0] + r
-            ymax = center_xys[..., 1] + b
-
+            xmin = (center_xys[..., 0] - l) / w * IMAGE_WIDTH
+            ymin = (center_xys[..., 1] - t) / h * IMAGE_HEIGHT
+            xmax = (center_xys[..., 0] + r) / w * IMAGE_WIDTH
+            ymax = (center_xys[..., 1] + b) / h * IMAGE_HEIGHT
+            
             xmin = tf.clip_by_value(xmin[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
             ymin = tf.clip_by_value(ymin[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
             xmax = tf.clip_by_value(xmax[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
             ymax = tf.clip_by_value(ymax[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
+
+            # xmin = xmin[..., tf.newaxis]
+            # ymin = ymin[..., tf.newaxis]
+            # xmax = xmax[..., tf.newaxis]
+            # ymax = ymax[..., tf.newaxis]
 
             # concatenate bboxes (xmin, ymin, xmax, ymax)
             _pred_bboxes = tf.concat([xmin, ymin, xmax, ymax], axis = -1)
