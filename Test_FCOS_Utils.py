@@ -55,7 +55,7 @@ fcos_utils = FCOS_Utils(fcos_sizes)
 #         cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 #     cv2.imshow('original', image)
 #     cv2.waitKey(1)
-    
+
 #     # 2.2 pyramid_dic
 #     gt_bboxes = np.concatenate([gt_bboxes, gt_classes[:, np.newaxis]], axis = -1)
 #     pyramid_dic = {'P%d'%level : [] for level in PYRAMID_LEVELS}
