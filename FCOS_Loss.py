@@ -13,7 +13,7 @@ pt = {
 FL(pt) = −(1 − pt)γ * log(pt)
 '''
 def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
-    with tf.variable_scope('Focal_Loss'):
+    with tf.variable_scope('Focal'):
         # focal_loss = [BATCH_SIZE, 22890, CLASSES]
         pt = gt_classes * pred_classes + (1 - gt_classes) * (1 - pred_classes) 
         focal_loss = -alpha * tf.pow(1. - pt, gamma) * tf.log(pt + 1e-10)

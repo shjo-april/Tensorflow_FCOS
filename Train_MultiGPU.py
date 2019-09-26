@@ -107,11 +107,11 @@ sess.run(tf.global_variables_initializer())
 # '''
 pretrained_vars = []
 for var in vars:
-    if 'resnet_v2_50' in var.name:
+    if 'resnet_v1_50' in var.name:
         pretrained_vars.append(var)
 
 pretrained_saver = tf.train.Saver(var_list = pretrained_vars)
-pretrained_saver.restore(sess, './resnet_v2_model/resnet_v2_50.ckpt')
+pretrained_saver.restore(sess, './resnet_v1_model/resnet_v1_50.ckpt')
 # '''
 
 saver = tf.train.Saver(max_to_keep = 100)

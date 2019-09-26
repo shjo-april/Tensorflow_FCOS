@@ -4,7 +4,7 @@
 import numpy as np
 import tensorflow as tf
 
-import resnet_v2.resnet_v2 as resnet_v2
+import resnet_v1.resnet_v1 as resnet_v1
 
 from Define import *
 
@@ -102,15 +102,15 @@ def FCOS_ResNet_50(input_var, is_training, reuse = False):
 
     # ResNetv2-50 (ImageNet)
     x -= MEAN
-    with tf.contrib.slim.arg_scope(resnet_v2.resnet_arg_scope()):
-        logits, end_points = resnet_v2.resnet_v2_50(x, is_training = is_training, reuse = reuse)
+    with tf.contrib.slim.arg_scope(resnet_v1.resnet_arg_scope()):
+        logits, end_points = resnet_v1.resnet_v1_50(x, is_training = is_training, reuse = reuse)
     
     # for key in end_points.keys():
     #     print(key, end_points[key])
     # input()
 
     pyramid_dic = {}
-    feature_maps = [end_points['resnet_v2_50/block{}'.format(i)] for i in [4, 2, 1]]
+    feature_maps = [end_points['resnet_v1_50/block{}'.format(i)] for i in [4, 2, 1]]
 
     pyramid_dic['C3'] = feature_maps[2]
     pyramid_dic['C4'] = feature_maps[1]
