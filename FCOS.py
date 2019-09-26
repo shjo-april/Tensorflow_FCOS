@@ -1,4 +1,5 @@
-import math
+# Copyright (C) 2019 * Ltd. All rights reserved.
+# author : SangHyeon Jo <josanghyeokn@gmail.com>
 
 import numpy as np
 import tensorflow as tf
@@ -7,8 +8,9 @@ import resnet_v2.resnet_v2 as resnet_v2
 
 from Define import *
 
-# initializer = tf.contrib.layers.xavier_initializer()
-initializer = tf.contrib.layers.variance_scaling_initializer()
+kernel_initializer = tf.random_normal_initializer(mean = 0.0, stddev = 0.01, seed = None)
+bias_initializer = tf.constant_initializer(value = 0.0)
+class_bias_initializer = tf.constant_initializer(value = -np.log((1 - 0.01) / 0.01))
 
 def group_normalization(x, is_training, G = 32, ESP = 1e-5, scope = 'group_norm'):
     with tf.variable_scope(scope):
@@ -31,7 +33,7 @@ def group_normalization(x, is_training, G = 32, ESP = 1e-5, scope = 'group_norm'
 
         gamma = tf.reshape(gamma, [1, C, 1, 1])
         beta = tf.reshape(beta, [1, C, 1, 1])
-
+        
         # 6. gamma * x + beta
         x = tf.reshape(x, [-1, C, H, W]) * gamma + beta
 
@@ -39,12 +41,12 @@ def group_normalization(x, is_training, G = 32, ESP = 1e-5, scope = 'group_norm'
         x = tf.transpose(x, [0, 2, 3, 1])
     return x
 
-def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, gn = True, activation = True, use_bias = True, upscaling = False):
+def conv_gn_relu(x, filters, kernel_size, strides, padding, is_training, scope, gn = True, activation = True, use_bias = True, upscaling = False):
     with tf.variable_scope(scope):
         if not upscaling:
-            x = tf.layers.conv2d(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, use_bias = use_bias, name = 'conv2d')
+            x = tf.layers.conv2d(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = kernel_initializer, use_bias = use_bias, name = 'conv2d')
         else:
-            x = tf.layers.conv2d_transpose(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, use_bias = use_bias, name = 'upconv2d')
+            x = tf.layers.conv2d_transpose(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = kernel_initializer, use_bias = use_bias, name = 'upconv2d')
         
         if gn:
             x = group_normalization(x, is_training = is_training, scope = 'gn')
@@ -55,33 +57,53 @@ def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, 
 
 def connection_block(x1, x2, is_training, scope):
     with tf.variable_scope(scope):
-        x1 = conv_bn_relu(x1, 256, [3, 3], 1, 'same', is_training, 'conv1', gn = True, activation = False)
-        x2 = conv_bn_relu(x2, 256, [1, 1], 1, 'valid', is_training, 'conv2', gn = True, activation = False)
+        x1 = conv_gn_relu(x1, 256, [3, 3], 1, 'same', is_training, 'conv1', gn = True, activation = False)
+        x2 = conv_gn_relu(x2, 256, [1, 1], 1, 'valid', is_training, 'conv2', gn = True, activation = False)
         x = tf.nn.relu(x1 + x2, name = 'relu')
     return x
 
 def build_head_loc(x, is_training, name, depth = 4):
     with tf.variable_scope(name):
         for i in range(depth):
-            x = conv_bn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
-
-        x = conv_bn_relu(x, 4, (3, 3), 1, 'same', is_training, 'loc', gn = False, activation = False)
-    return x
+            x = conv_gn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
+        
+        center_ness_x = conv_gn_relu(x, 1, (3, 3), 1, 'same', is_training, 'center-ness', gn = False, activation = False) 
+        regression_x = conv_gn_relu(x, 4, (3, 3), 1, 'same', is_training, 'regression', gn = False, activation = False)
+    return regression_x, center_ness_x
 
 def build_head_cls(x, is_training, name, depth = 4):
     with tf.variable_scope(name):
         for i in range(depth):
-            x = conv_bn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
-
-        x = tf.layers.conv2d(inputs = x, filters = CLASSES, kernel_size = [3, 3], strides = 1, padding = 'same', kernel_initializer = initializer, bias_initializer = tf.constant_initializer(-math.log((1 - 0.01) / 0.01)), name = 'conv')
+            x = conv_gn_relu(x, 256, (3, 3), 1, 'same', is_training, '{}'.format(i))
+        
+        x = tf.layers.conv2d(inputs = x, filters = CLASSES, kernel_size = [3, 3], strides = 1, padding = 'same', 
+                             kernel_initializer = kernel_initializer, bias_initializer = class_bias_initializer, name = 'classification')
     return x
 
-def FCOS_ResNet_50(input_var, is_training, reuse = False):
+def FCOS_Decode_Layer(pred_bboxes, decode_centers):
+    # calculate xmin, ymin, xmax, ymax
+    xmin = decode_centers[..., 0] - pred_bboxes[..., 0] 
+    ymin = decode_centers[..., 1] - pred_bboxes[..., 1]
+    xmax = decode_centers[..., 0] + pred_bboxes[..., 2]
+    ymax = decode_centers[..., 1] + pred_bboxes[..., 3]
+    
+    xmin = tf.clip_by_value(xmin[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
+    ymin = tf.clip_by_value(ymin[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
+    xmax = tf.clip_by_value(xmax[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
+    ymax = tf.clip_by_value(ymax[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
+    
+    # concatenate bboxes (xmin, ymin, xmax, ymax)
+    pred_bboxes = tf.concat([xmin, ymin, xmax, ymax], axis = -1)
+    return pred_bboxes
 
-    x = input_var - [103.939, 123.68, 116.779]
+def FCOS_ResNet_50(input_var, is_training, reuse = False):
+    # convert BGR -> RGB
+    x = input_var[..., ::-1]
+
+    # ResNetv2-50 (ImageNet)
+    x -= MEAN
     with tf.contrib.slim.arg_scope(resnet_v2.resnet_arg_scope()):
-        # freeze : batch norm
-        logits, end_points = resnet_v2.resnet_v2_50(x, is_training = False, reuse = reuse)
+        logits, end_points = resnet_v2.resnet_v2_50(x, is_training = is_training, reuse = reuse)
     
     # for key in end_points.keys():
     #     print(key, end_points[key])
@@ -102,20 +124,20 @@ def FCOS_ResNet_50(input_var, is_training, reuse = False):
     fcos_sizes = []
     
     with tf.variable_scope('FCOS', reuse = reuse):
-        x = conv_bn_relu(pyramid_dic['C5'], 256, (1, 1), 1, 'valid', is_training, 'P5_conv')
+        x = conv_gn_relu(pyramid_dic['C5'], 256, (1, 1), 1, 'valid', is_training, 'P5_conv')
         pyramid_dic['P5'] = x
 
-        x = conv_bn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P6_conv')
+        x = conv_gn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P6_conv')
         pyramid_dic['P6'] = x
         
-        x = conv_bn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P7_conv')
+        x = conv_gn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P7_conv')
         pyramid_dic['P7'] = x
 
-        x = conv_bn_relu(pyramid_dic['P5'], 256, (3, 3), 2, 'same', is_training, 'P4_conv_1', upscaling = True)
+        x = conv_gn_relu(pyramid_dic['P5'], 256, (3, 3), 2, 'same', is_training, 'P4_conv_1', upscaling = True)
         x = connection_block(x, pyramid_dic['C4'], is_training, 'P4_conv')
         pyramid_dic['P4'] = x
 
-        x = conv_bn_relu(pyramid_dic['P4'], 256, (3, 3), 2, 'same', is_training, 'P3_conv_1', upscaling = True)
+        x = conv_gn_relu(pyramid_dic['P4'], 256, (3, 3), 2, 'same', is_training, 'P3_conv_1', upscaling = True)
         x = connection_block(x, pyramid_dic['C3'], is_training, 'P3_conv')
         pyramid_dic['P3'] = x
         
@@ -131,64 +153,51 @@ def FCOS_ResNet_50(input_var, is_training, reuse = False):
         # input()
         
         pred_bboxes = []
+        pred_centers = []
         pred_classes = []
         
-        for i in range(3, 7 + 1):
-            feature_map = pyramid_dic['P{}'.format(i)]
+        for i in range(len(PYRAMID_LEVELS)):
+            level = PYRAMID_LEVELS[i]
+            feature_map = pyramid_dic['P{}'.format(level)]
             _, h, w, c = feature_map.shape.as_list()
             
-            _pred_bboxes = build_head_loc(feature_map, is_training, 'P{}_bboxes'.format(i))
-            _pred_classes = build_head_cls(feature_map, is_training, 'P{}_classes'.format(i))
+            # get regression, center-ness, classification
+            _pred_bboxes, _pred_centers = build_head_loc(feature_map, is_training, 'P{}_Regression_Branch'.format(level))
+            _pred_classes = build_head_cls(feature_map, is_training, 'P{}_Classification_Branch'.format(level))
 
-            # parsing (l*, t*, r*, b*)
+            # activation
             _pred_bboxes = tf.exp(_pred_bboxes)
-            l = _pred_bboxes[:, :, :, 0]
-            t = _pred_bboxes[:, :, :, 1]
-            r = _pred_bboxes[:, :, :, 2]
-            b = _pred_bboxes[:, :, :, 3]
-
-            # generate center_xys (shape = [w, h, 2])
-            xs = (tf.range(w, dtype = tf.float32) + 0.5)
-            ys = (tf.range(h, dtype = tf.float32) + 0.5)
-
-            xs, ys = tf.meshgrid(xs, ys)
-            center_xys = tf.concat([xs[..., tf.newaxis], ys[..., tf.newaxis]], axis = -1)
+            _pred_classes = tf.nn.sigmoid(_pred_classes)
             
-            # calculate xmin, ymin, xmax, ymax
-            xmin = (center_xys[..., 0] - l) / w * IMAGE_WIDTH
-            ymin = (center_xys[..., 1] - t) / h * IMAGE_HEIGHT
-            xmax = (center_xys[..., 0] + r) / w * IMAGE_WIDTH
-            ymax = (center_xys[..., 1] + b) / h * IMAGE_HEIGHT
-            
-            xmin = tf.clip_by_value(xmin[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
-            ymin = tf.clip_by_value(ymin[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
-            xmax = tf.clip_by_value(xmax[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
-            ymax = tf.clip_by_value(ymax[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
+            # parsing (l*, t*, r*, b*)
+            l = tf.clip_by_value(_pred_bboxes[:, :, :, 0] * STRIDES[i], 0, IMAGE_WIDTH)
+            t = tf.clip_by_value(_pred_bboxes[:, :, :, 1] * STRIDES[i], 0, IMAGE_HEIGHT)
+            r = tf.clip_by_value(_pred_bboxes[:, :, :, 2] * STRIDES[i], 0, IMAGE_WIDTH)
+            b = tf.clip_by_value(_pred_bboxes[:, :, :, 3] * STRIDES[i], 0, IMAGE_HEIGHT)
 
-            # xmin = xmin[..., tf.newaxis]
-            # ymin = ymin[..., tf.newaxis]
-            # xmax = xmax[..., tf.newaxis]
-            # ymax = ymax[..., tf.newaxis]
+            # merge l*, t*, r*, b*
+            _pred_bboxes = tf.transpose(tf.stack([l, t, r, b]), [1, 2, 3, 0])
 
-            # concatenate bboxes (xmin, ymin, xmax, ymax)
-            _pred_bboxes = tf.concat([xmin, ymin, xmax, ymax], axis = -1)
-
-            # reshape bboxes, classes (without center-ness)
+            # reshape bboxes, classes, center-ness
             _pred_bboxes = tf.reshape(_pred_bboxes, [-1, h * w, 4])
+            _pred_centers = tf.reshape(_pred_centers, [-1, h * w, 1])
             _pred_classes = tf.reshape(_pred_classes, [-1, h * w, CLASSES])
             
-            # append sizes, bboxes, classes
+            # append sizes, bboxes, centers, classes
             fcos_sizes.append([w, h])
             pred_bboxes.append(_pred_bboxes)
+            pred_centers.append(_pred_centers)
             pred_classes.append(_pred_classes)
 
-        # concatenate bboxes, classes (axis = 1)
-        pred_bboxes = tf.concat(pred_bboxes, axis = 1, name = 'bboxes')
-        pred_classes = tf.concat(pred_classes, axis = 1, name = 'classes')
+        # concatenate bboxes, centers, classes (axis = 1)
+        pred_bboxes = tf.concat(pred_bboxes, axis = 1, name = 'Regression')
+        pred_centers = tf.concat(pred_centers, axis = 1, name = 'Center-ness')
+        pred_classes = tf.concat(pred_classes, axis = 1, name = 'Classification')
 
         # update dictionary 
         fcos_dic['pred_bboxes'] = pred_bboxes
-        fcos_dic['pred_classes'] = tf.nn.sigmoid(pred_classes)
+        fcos_dic['pred_centers'] = pred_centers
+        fcos_dic['pred_classes'] = pred_classes
 
     return fcos_dic, fcos_sizes
 
@@ -200,4 +209,5 @@ if __name__ == '__main__':
     fcos_dic, fcos_sizes = FCOS(input_var, False)
     
     print(fcos_dic['pred_bboxes'])
+    print(fcos_dic['pred_centers'])
     print(fcos_dic['pred_classes'])

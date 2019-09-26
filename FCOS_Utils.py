@@ -8,201 +8,136 @@ from Define import *
 from Utils import *
 from DataAugmentation import *
 
-def get_data(xml_path, training, normalize = True, augment = True):
-    if training:
-        image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = False)
-
-        image = cv2.imread(image_path)
-        
-        if augment:
-            image, gt_bboxes, gt_classes = DataAugmentation(image, gt_bboxes, gt_classes)
-
-        image_h, image_w, image_c = image.shape
-        image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
-
-        gt_bboxes = gt_bboxes.astype(np.float32)
-        gt_classes = np.asarray(gt_classes, dtype = np.int32)
-
-        if normalize:
-            gt_bboxes /= [image_w, image_h, image_w, image_h]
-            gt_bboxes *= [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]
-    else:
-        image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = normalize)
-        image = cv2.imread(image_path)
-
-    return image, gt_bboxes, gt_classes
-
 class FCOS_Utils:
     def __init__(self, sizes):
         self.sizes = sizes
+        self.generate_centers()
+
+    def generate_centers(self):
+        self.centers = {}
+        self.decode_centers = []
+
+        for level, size in zip(PYRAMID_LEVELS, self.sizes):
+            w, h = size
+            
+            cx = np.arange(w) + 0.5
+            cy = np.arange(h) + 0.5
+            cx, cy = np.meshgrid(cx, cy)
+
+            centers = np.concatenate([cx[..., np.newaxis], cy[..., np.newaxis]], axis = -1)
+            centers = centers / [w, h] * [IMAGE_WIDTH, IMAGE_HEIGHT]
+
+            self.centers['P%d'%level] = centers
+            self.decode_centers.append(centers.reshape((-1, 2)))
+
+        self.decode_centers = np.concatenate(self.decode_centers, axis = 0)
 
     def Encode(self, gt_bboxes, gt_classes):
-        total_decode_bboxes = np.zeros((0, 4), dtype = np.float32)
-        total_decode_classes = np.zeros((0, CLASSES), dtype = np.float32)
+        # 1. prepare gt_bboxes (bboxes + classes) & pyramid_dictionary
+        gt_bboxes = np.concatenate([gt_bboxes, gt_classes[:, np.newaxis]], axis = -1)
+        pyramid_dic = {'P%d'%level : [] for level in PYRAMID_LEVELS}
+        
+        # 2. pyramid_dic <- separate gt_bboxes
+        for i in range(len(self.sizes)):    
+            m_index = i + 1
+            pyramid_name = 'P{}'.format(PYRAMID_LEVELS[i])
 
-        m_indexs = np.arange(3, 7 + 1)
+            for gt_bbox in gt_bboxes:
+                # get width, height
+                width = gt_bbox[2] - gt_bbox[0]
+                height = gt_bbox[3] - gt_bbox[1]
 
-        for index, size in zip(m_indexs, self.sizes):
-            w, h = size
-            decode_bboxes = np.zeros([h, w, 4], dtype = np.float32)
-            decode_classes = np.zeros([h, w, CLASSES], dtype = np.float32)
+                # calculate bbox_area = root(width * height)
+                bbox_area = np.sqrt(width * height)
+                if bbox_area >= M_LIST[m_index - 1] and bbox_area <= M_LIST[m_index]:
+                    pyramid_dic[pyramid_name].append(gt_bbox)
 
-            decode_classes[:, :, 0] = 1.
+        # 3. generate gt_bboxes, gt_classes and gt_centers.
+        total_encode_bboxes = []
+        total_encode_centers = []
+        total_encode_classes = []
 
-            for gt_bbox, gt_class in zip(gt_bboxes, gt_classes):
-                xmin, ymin, xmax, ymax = gt_bbox
-                
-                center_x, center_y = (xmin + xmax) / 2, (ymin + ymax) / 2
-                width, height = xmax - xmin, ymax - ymin
-
-                bbox_size = max(width, height)
-                # print(bbox_size, M_LIST[index - 1], M_LIST[index])
-
-                if bbox_size >= M_LIST[index - 1] and bbox_size <= M_LIST[index]:
-                    grid_x = int(center_x / IMAGE_WIDTH * w)
-                    grid_y = int(center_y / IMAGE_HEIGHT * h)
-
-                    decode_bboxes[grid_y, grid_x, :] = gt_bbox
-                    decode_classes[grid_y, grid_x, :] = one_hot(gt_class)
-
-            decode_bboxes = decode_bboxes.reshape((-1, 4))
-            decode_classes = decode_classes.reshape((-1, CLASSES))
-
-            total_decode_bboxes = np.append(total_decode_bboxes, decode_bboxes, axis = 0)
-            total_decode_classes = np.append(total_decode_classes, decode_classes, axis = 0)
-
-        return total_decode_bboxes, total_decode_classes
-
-    def Encode_Debug(self, gt_bboxes, gt_classes):
-        info_list = []
-
-        total_decode_bboxes = np.zeros((0, 4), dtype = np.float32)
-        total_decode_classes = np.zeros((0, CLASSES), dtype = np.float32)
-
-        m_indexs = np.arange(3, 7 + 1)
-
-        for index, size in zip(m_indexs, self.sizes):
-            w, h = size
-            decode_bboxes = np.zeros([h, w, 4], dtype = np.float32)
-            decode_classes = np.zeros([h, w, CLASSES], dtype = np.float32)
-
-            decode_classes[:, :, 0] = 1.
-
-            for gt_bbox, gt_class in zip(gt_bboxes, gt_classes):
-                xmin, ymin, xmax, ymax = gt_bbox
-                
-                center_x, center_y = (xmin + xmax) / 2, (ymin + ymax) / 2
-                width, height = xmax - xmin, ymax - ymin
-
-                bbox_size = max(width, height)
-                # print(bbox_size, M_LIST[index - 1], M_LIST[index])
-
-                if bbox_size >= M_LIST[index - 1] and bbox_size <= M_LIST[index]:
-                    grid_x = int(center_x / IMAGE_WIDTH * w)
-                    grid_y = int(center_y / IMAGE_HEIGHT * h)
-
-                    grid_cx = (grid_x + 0.5) / w * IMAGE_WIDTH
-                    grid_cy = (grid_y + 0.5) / h * IMAGE_HEIGHT
-
-                    l = grid_cx - xmin
-                    t = grid_cy - ymin
-                    r = xmax - grid_cx
-                    b = ymax - grid_cy
-
-                    lr_center_ness = min(l, r) / max(max(l, r), 1e-12)
-                    tb_center_ness = min(t, b) / max(max(t, b), 1e-12)
-                    center_ness = np.sqrt(lr_center_ness * tb_center_ness)
-
-                    info_list.append([grid_cx, grid_cy, l, t, r, b, center_ness])
-                    
-                    decode_bboxes[grid_y, grid_x, :] = gt_bbox
-                    decode_classes[grid_y, grid_x, :] = one_hot(gt_class)
-
-            decode_bboxes = decode_bboxes.reshape((-1, 4))
-            decode_classes = decode_classes.reshape((-1, CLASSES))
-
-            total_decode_bboxes = np.append(total_decode_bboxes, decode_bboxes, axis = 0)
-            total_decode_classes = np.append(total_decode_classes, decode_classes, axis = 0)
-
-        return total_decode_bboxes, total_decode_classes, info_list
-
-    def Decode(self, decode_bboxes, decode_classes, image_wh, detect_threshold = 0.05, use_nms = False):
-        total_class_probs = np.max(decode_classes[:, 1:], axis = -1)
-        total_class_indexs = np.argmax(decode_classes[:, 1:], axis = -1)
-
-        cond = total_class_probs >= detect_threshold
+        for i in range(len(self.sizes)):
+            w, h = self.sizes[i]
+            pyramid_name = 'P{}'.format(PYRAMID_LEVELS[i])
             
-        pred_bboxes = decode_bboxes[cond]
-        class_probs = total_class_probs[cond][..., np.newaxis]
+            # get separate bboxes & centers
+            bboxes = np.asarray(pyramid_dic[pyramid_name], dtype = np.float32)
+            centers = self.centers[pyramid_name].reshape((-1, 2))
+
+            # create encode_bboxes, centers and classes.
+            encode_bboxes = np.zeros((h * w, 4), dtype = np.float32)
+            encode_centers = np.zeros((h * w, 1), dtype = np.float32)
+            encode_classes = np.zeros((h * w, CLASSES), dtype = np.float32)
+
+            # calculate l*, t*, r*, b*, center-ness
+            for bbox in bboxes:
+                xmin, ymin, xmax, ymax, c = bbox
+
+                # in center_x, center_y
+                x_mask = np.logical_and(xmin <= centers[:, 0], centers[:, 0] <= xmax)
+                y_mask = np.logical_and(ymin <= centers[:, 1], centers[:, 1] <= ymax)
+                in_mask = np.logical_and(x_mask, y_mask)
+                
+                # calculate l*, t*, r*, b*
+                l = np.maximum(centers[:, 0] - xmin, 0)
+                t = np.maximum(centers[:, 1] - ymin, 0)
+                r = np.maximum(xmax - centers[:, 0], 0)
+                b = np.maximum(ymax - centers[:, 1], 0)
+                
+                # calculate center-ness (0 to 1)
+                center_ness = (np.minimum(l, r) * np.minimum(t, b)) / (np.maximum(l, r) * np.maximum(t, b))
+                center_ness = np.sqrt(center_ness)
+
+                # in_mask, higher than center-ness
+                mask = np.logical_and(in_mask, encode_centers[:, 0] < center_ness)
+                
+                # update
+                encode_bboxes[mask, 0] = l[mask]
+                encode_bboxes[mask, 1] = t[mask]
+                encode_bboxes[mask, 2] = r[mask]
+                encode_bboxes[mask, 3] = b[mask]
+                encode_centers[mask, 0] = center_ness[mask]
+                encode_classes[mask, :] = one_hot(c)
+
+            # stack
+            total_encode_bboxes.append(encode_bboxes)
+            total_encode_centers.append(encode_centers)
+            total_encode_classes.append(encode_classes)
+
+        # concatenation
+        total_encode_bboxes = np.concatenate(total_encode_bboxes, axis = 0)
+        total_encode_centers = np.concatenate(total_encode_centers, axis = 0)
+        total_encode_classes = np.concatenate(total_encode_classes, axis = 0)
+
+        return total_encode_bboxes, total_encode_centers, total_encode_classes
+
+    def Decode(self, encode_bboxes, encode_centers, encode_classes, image_wh, detect_threshold = 0.05, use_nms = False, topk = 100):
+        # 1. get Regression (left, top, right, bottom)
+        lt = self.decode_centers - encode_bboxes[:, :2]
+        rb = self.decode_centers + encode_bboxes[:, 2:]
+        
+        decode_bboxes = np.concatenate([lt, rb], axis = -1)
+
+        # 2. 
+        class_probs = np.max(encode_classes[:, 1:], axis = -1)
+        class_indexs = np.argmax(encode_classes[:, 1:], axis = -1)
+        
+        # with center-ness
+        # class_probs *= encode_centers
+
+        topk_prob = np.sort(class_probs)[::-1][topk]
+        cond = np.logical_and(class_probs >= detect_threshold, topk_prob <= class_probs)
+        
+        pred_bboxes = convert_bboxes(decode_bboxes[cond], image_wh = image_wh)
+        class_probs = class_probs[cond][..., np.newaxis]
         
         pred_bboxes = np.concatenate((pred_bboxes, class_probs), axis = -1)
-        pred_classes = total_class_indexs[cond] + 1
-
-        pred_bboxes[:, :4] = convert_bboxes(pred_bboxes[:, :4], image_wh = image_wh)
+        pred_classes = class_indexs[cond] + 1
 
         if use_nms:
             pred_bboxes, pred_classes = class_nms(pred_bboxes, pred_classes)
 
         return pred_bboxes.astype(np.float32), pred_classes.astype(np.int32)
 
-if __name__ == '__main__':
-    import cv2
-    from FCOS import *
-
-    input_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
-    fcos_dic, fcos_sizes = FCOS(input_var, False)
-    
-    # 1. Test GT bboxes (Encode -> Decode)
-    fcos_utils = FCOS_Utils(fcos_sizes)
-    xml_paths = glob.glob('D:/DB/VOC2007/train/xml/*.xml')
-    
-    for xml_path in xml_paths:
-        image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = True)
-
-        image = cv2.imread(image_path)
-        h, w, c = image.shape
-        
-        decode_bboxes, decode_classes, info_list = fcos_utils.Encode_Debug(gt_bboxes, gt_classes)
-        positive_count = np.sum(decode_classes[:, 1:])
-        print(positive_count, decode_classes.shape)
-        
-        pred_bboxes, pred_classes = fcos_utils.Decode(decode_bboxes, decode_classes, [w, h], use_nms = True)
-        print(pred_bboxes.shape, pred_classes.shape)
-
-        # center info
-        for info in info_list:
-            data = np.asarray(info[:-1]).reshape((-1, 2)) / [IMAGE_WIDTH, IMAGE_HEIGHT] * [w, h]
-            grid_cx, grid_cy, l, t, r, b = data.reshape(-1).astype(np.int32)
-
-            center_ness = info[-1]
-            
-            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx - l, grid_cy), (255, 0, 128), 1)
-            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx + r, grid_cy), (255, 0, 128), 1)
-            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx, grid_cy - t), (255, 0, 128), 1)
-            cv2.arrowedLine(image, (grid_cx, grid_cy), (grid_cx, grid_cy + b), (255, 0, 128), 1)
-            cv2.circle(image, (grid_cx, grid_cy), 1, (0, 0, 255), 2)
-
-            cv2.putText(image, 'center = {:.2f}'.format(center_ness), (grid_cx - 10, grid_cy - 10), 1, 1, (0, 0, 255), 2)
-        
-        for pred_bbox, pred_class in zip(pred_bboxes, pred_classes):
-            xmin, ymin, xmax, ymax = pred_bbox[:4].astype(np.int32)
-            confidence = pred_bbox[4] * 100
-            class_name = CLASS_NAMES[pred_class]
-
-            cv2.putText(image, '{} = {:.2f}%'.format(class_name, confidence), (xmin, ymin - 10), 1, 1, (0, 255, 0), 1)
-            cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 1)
-
-        # class_name = 'person'
-        # pred_bboxes = fcos_utils.Decode(decode_bboxes, decode_classes, [w, h], find_class = CLASS_DIC[class_name], use_nms = True)
-        # print(pred_bboxes.shape)
-        
-        # for pred_bbox in pred_bboxes:
-        #     xmin, ymin, xmax, ymax = pred_bbox[:4].astype(np.int32)
-        #     confidence = pred_bbox[4] * 100
-
-        #     cv2.putText(image, '{} = {:.2f}%'.format(class_name, confidence), (xmin, ymin - 10), 1, 1, (0, 255, 0), 1)
-        #     cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 1)
-
-        cv2.imshow('show', image)
-        cv2.waitKey(0)
 

@@ -56,47 +56,9 @@ def xml_read(xml_path, find_labels = CLASS_NAMES, normalize = False):
 
     return image_path, np.asarray(bboxes, dtype = np.float32), np.asarray(classes, dtype = np.int32)
 
-def class_xml_read(xml_path, find_labels):
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-    
-    image_path = xml_path[:-3] + '*'
-    image_path = image_path.replace('/xml', '/image')
-    image_path = glob.glob(image_path)[0]
-
-    size = root.find('size')
-    image_width = int(size.find('width').text)
-    image_height = int(size.find('height').text)
-    
-    bboxes = {}
-    
-    for obj in root.findall('object'):
-        label = obj.find('name').text
-        if not label in find_labels:
-            continue
-            
-        bbox = obj.find('bndbox')
-        
-        bbox_xmin = max(min(int(bbox.find('xmin').text.split('.')[0]), image_width - 1), 0)
-        bbox_ymin = max(min(int(bbox.find('ymin').text.split('.')[0]), image_height - 1), 0)
-        bbox_xmax = max(min(int(bbox.find('xmax').text.split('.')[0]), image_width - 1), 0)
-        bbox_ymax = max(min(int(bbox.find('ymax').text.split('.')[0]), image_height - 1), 0)
-
-        if (bbox_xmax - bbox_xmin) == 0 or (bbox_ymax - bbox_ymin) == 0:
-            continue
-
-        try:
-            bboxes[label]
-        except KeyError:
-            bboxes[label] = []
-
-        bboxes[label].append([bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax])
-
-    return image_path, bboxes
-
 def one_hot(gt_class, classes = CLASSES):
     label = np.zeros((classes), dtype = np.float32)
-    label[gt_class] = 1.
+    label[int(gt_class)] = 1.
     return label
 
 def convert_bboxes(bboxes, image_wh, ori_wh = [IMAGE_WIDTH, IMAGE_HEIGHT]):
