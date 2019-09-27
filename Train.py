@@ -68,11 +68,11 @@ with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
     train_op = tf.train.MomentumOptimizer(learning_rate_var, momentum = 0.9).minimize(loss_op)
 
 train_summary_dic = {
-    'Total_Loss' : loss_op,
-    'Focal_Loss' : focal_loss_op,
-    'Center_Loss' : center_loss_op,
-    'GIoU_Loss' : giou_loss_op,
-    'L2_Regularization_Loss' : l2_reg_loss_op,
+    'Loss/Total_Loss' : loss_op,
+    'Loss/Focal_Loss' : focal_loss_op,
+    'Loss/Center_Loss' : center_loss_op,
+    'Loss/GIoU_Loss' : giou_loss_op,
+    'Loss/L2_Regularization_Loss' : l2_reg_loss_op,
     'Learning_rate' : learning_rate_var,
 }
 
@@ -81,6 +81,9 @@ for name in train_summary_dic.keys():
     value = train_summary_dic[name]
     train_summary_list.append(tf.summary.scalar(name, value))
 train_summary_op = tf.summary.merge(train_summary_list)
+
+log_image_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
+log_image_op = tf.summary.image('Image/Train', log_image_var, LOG_SAMPLES)
 
 # 3. train
 sess = tf.Session()
@@ -118,6 +121,8 @@ for i in range(NUM_THREADS):
     train_thread = Teacher('./dataset/train_detection.npy', fcos_sizes, debug = False)
     train_thread.start()
     train_threads.append(train_thread)
+
+sample_data_list = train_data_list[:SAMPLE_ITERATION]
 
 for iter in range(1, MAX_ITERATION + 1):
     if iter in DECAY_ITERATIONS:
@@ -165,6 +170,9 @@ for iter in range(1, MAX_ITERATION + 1):
         giou_loss_list = []
         l2_reg_loss_list = []
         train_time = time.time()
+
+    if iter % SAMPLE_ITERATION == 0:
+
 
     if iter % SAVE_ITERATION == 0:
         saver.save(sess, './model/FCOS_{}.ckpt'.format(iter))

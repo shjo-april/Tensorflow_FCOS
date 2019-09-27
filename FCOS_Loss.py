@@ -96,7 +96,7 @@ if __name__ == '__main__':
 
     pred_ops = [pred_bboxes, pred_centers, pred_classes]
     gt_ops = [gt_bboxes, gt_centers, gt_classes]
-
+    
     loss_op, focal_loss_op, center_loss_op, giou_loss_op = FCOS_Loss(pred_ops, gt_ops)
     print(loss_op, focal_loss_op, center_loss_op, giou_loss_op)
 
