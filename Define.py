@@ -2,7 +2,7 @@
 # author : SangHyeon Jo <josanghyeokn@gmail.com>
 
 # dataset parameters
-ROOT_DIR = 'D:/_ImageDataset/COCO/'
+ROOT_DIR = 'D:/_DeepLearning_DB/COCO/'
 TRAIN_DIR = ROOT_DIR + 'train2017/image/'
 VALID_DIR = ROOT_DIR + 'valid2017/image/'
 

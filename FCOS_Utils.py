@@ -124,7 +124,7 @@ class FCOS_Utils:
         class_indexs = np.argmax(encode_classes[:, 1:], axis = -1)
         
         # with center-ness
-        # class_probs *= encode_centers
+        # class_probs *= encode_centers[:, 0]
 
         topk_prob = np.sort(class_probs)[::-1][topk]
         cond = np.logical_and(class_probs >= detect_threshold, topk_prob <= class_probs)
