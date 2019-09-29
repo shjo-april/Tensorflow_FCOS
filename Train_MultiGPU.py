@@ -22,7 +22,7 @@ from FCOS_Utils import *
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_INFO
 
 # 1. dataset
-train_data_list = np.load('./dataset/train_detection.npy', allow_pickle = True)[:100]
+train_data_list = np.load('./dataset/train_detection.npy', allow_pickle = True)
 valid_data_list = np.load('./dataset/validation_detection.npy', allow_pickle = True)
 valid_count = len(valid_data_list)
 
@@ -101,13 +101,13 @@ for name in train_summary_dic.keys():
 train_summary_op = tf.summary.merge(train_summary_list)
 
 log_image_var = tf.placeholder(tf.float32, [None, SAMPLE_IMAGE_HEIGHT, SAMPLE_IMAGE_WIDTH, IMAGE_CHANNEL])
-log_image_op = tf.summary.image('Image/Train', log_image_var, LOG_SAMPLES)
+log_image_op = tf.summary.image('Image/Train', log_image_var, SAMPLES)
 
 # 3. train
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-# '''
+'''
 pretrained_vars = []
 for var in vars:
     if 'resnet_v1_50' in var.name:
@@ -115,10 +115,10 @@ for var in vars:
 
 pretrained_saver = tf.train.Saver(var_list = pretrained_vars)
 pretrained_saver.restore(sess, './resnet_v1_model/resnet_v1_50.ckpt')
-# '''
+'''
 
 saver = tf.train.Saver(max_to_keep = 100)
-# saver.restore(sess, './model/FCOS_{}.ckpt'.format(115000))
+saver.restore(sess, './model/FCOS_{}.ckpt'.format(150000))
 
 learning_rate = INIT_LEARNING_RATE
 

@@ -22,7 +22,7 @@ from FCOS_Utils import *
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # 1. dataset
-train_data_list = np.load('./dataset/train_detection.npy', allow_pickle = True)[:100]
+train_data_list = np.load('./dataset/train_detection.npy', allow_pickle = True)
 valid_data_list = np.load('./dataset/validation_detection.npy', allow_pickle = True)
 valid_count = len(valid_data_list)
 
@@ -83,7 +83,7 @@ for name in train_summary_dic.keys():
 train_summary_op = tf.summary.merge(train_summary_list)
 
 log_image_var = tf.placeholder(tf.float32, [None, SAMPLE_IMAGE_HEIGHT, SAMPLE_IMAGE_WIDTH, IMAGE_CHANNEL])
-log_image_op = tf.summary.image('Image/Train', log_image_var, LOG_SAMPLES)
+log_image_op = tf.summary.image('Image/Train', log_image_var, SAMPLES)
 
 # 3. train
 sess = tf.Session()

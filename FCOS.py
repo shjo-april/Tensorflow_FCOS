@@ -174,7 +174,7 @@ def FCOS_ResNet_50(input_var, is_training, reuse = False):
             t = tf.clip_by_value(_pred_bboxes[:, :, :, 1] * STRIDES[i], 0, M_LIST[i + 1])
             r = tf.clip_by_value(_pred_bboxes[:, :, :, 2] * STRIDES[i], 0, M_LIST[i + 1])
             b = tf.clip_by_value(_pred_bboxes[:, :, :, 3] * STRIDES[i], 0, M_LIST[i + 1])
-
+            
             # merge l*, t*, r*, b*
             _pred_bboxes = tf.transpose(tf.stack([l, t, r, b]), [1, 2, 3, 0])
 
