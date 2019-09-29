@@ -37,26 +37,11 @@ class FCOS_Utils:
         gt_bboxes = np.concatenate([gt_bboxes, gt_classes[:, np.newaxis]], axis = -1)
         pyramid_dic = {'P%d'%level : [] for level in PYRAMID_LEVELS}
         
-        # 2. pyramid_dic <- separate gt_bboxes
-        for i in range(len(self.sizes)):    
-            m_index = i + 1
-            pyramid_name = 'P{}'.format(PYRAMID_LEVELS[i])
-
-            for gt_bbox in gt_bboxes:
-                # get width, height
-                width = gt_bbox[2] - gt_bbox[0]
-                height = gt_bbox[3] - gt_bbox[1]
-
-                # calculate bbox_area = root(width * height)
-                bbox_area = np.sqrt(width * height)
-                if bbox_area >= M_LIST[m_index - 1] and bbox_area <= M_LIST[m_index]:
-                    pyramid_dic[pyramid_name].append(gt_bbox)
-
-        # 3. generate gt_bboxes, gt_classes and gt_centers.
+        # 2. generate gt_bboxes, gt_classes and gt_centers.
         total_encode_bboxes = []
         total_encode_centers = []
         total_encode_classes = []
-
+        
         for i in range(len(self.sizes)):
             w, h = self.sizes[i]
             pyramid_name = 'P{}'.format(PYRAMID_LEVELS[i])
@@ -64,14 +49,13 @@ class FCOS_Utils:
             # get separate bboxes & centers
             bboxes = np.asarray(pyramid_dic[pyramid_name], dtype = np.float32)
             centers = self.centers[pyramid_name].reshape((-1, 2))
-
+            
             # create encode_bboxes, centers and classes.
             encode_bboxes = np.zeros((h * w, 4), dtype = np.float32)
             encode_centers = np.zeros((h * w, 1), dtype = np.float32)
             encode_classes = np.zeros((h * w, CLASSES), dtype = np.float32)
 
-            # calculate l*, t*, r*, b*, center-ness
-            for bbox in bboxes:
+            for bbox in gt_bboxes:
                 xmin, ymin, xmax, ymax, c = bbox
 
                 # in center_x, center_y
@@ -84,14 +68,19 @@ class FCOS_Utils:
                 t = np.maximum(centers[:, 1] - ymin, 0)
                 r = np.maximum(xmax - centers[:, 0], 0)
                 b = np.maximum(ymax - centers[:, 1], 0)
+                ltrb = np.stack([l, t, r, b]).T
                 
+                max_v = np.max(ltrb, axis = -1)
+                max_mask = np.logical_and(max_v >= M_LIST[i], max_v <= M_LIST[i + 1])
+
                 # calculate center-ness (0 to 1)
                 center_ness = (np.minimum(l, r) * np.minimum(t, b)) / (np.maximum(l, r) * np.maximum(t, b))
                 center_ness = np.sqrt(center_ness)
 
                 # in_mask, higher than center-ness
                 mask = np.logical_and(in_mask, encode_centers[:, 0] < center_ness)
-                
+                mask = np.logical_and(mask, max_mask)
+
                 # update
                 encode_bboxes[mask, 0] = l[mask]
                 encode_bboxes[mask, 1] = t[mask]

@@ -82,7 +82,7 @@ for name in train_summary_dic.keys():
     train_summary_list.append(tf.summary.scalar(name, value))
 train_summary_op = tf.summary.merge(train_summary_list)
 
-log_image_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
+log_image_var = tf.placeholder(tf.float32, [None, SAMPLE_IMAGE_HEIGHT, SAMPLE_IMAGE_WIDTH, IMAGE_CHANNEL])
 log_image_op = tf.summary.image('Image/Train', log_image_var, LOG_SAMPLES)
 
 # 3. train
@@ -172,17 +172,14 @@ for iter in range(1, MAX_ITERATION + 1):
         train_time = time.time()
 
     if iter % SAMPLE_ITERATION == 0:
-
         sample_images = []
-
         for data in sample_data_list:
             image_name, gt_bboxes, gt_classes = data
 
             image = cv2.imread(TRAIN_DIR + image_name)
-
             tf_image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
+
             total_pred_bboxes, total_pred_centers, total_pred_classes = sess.run([pred_bboxes_op, pred_centers_op, pred_classes_op], feed_dict = {input_var : [tf_image], is_training : False})
-            
             pred_bboxes, pred_classes = fcos_utils.Decode(total_pred_bboxes[0], total_pred_centers[0], total_pred_classes[0], [IMAGE_WIDTH, IMAGE_HEIGHT], detect_threshold = 0.5)
             
             for bbox, class_index in zip(pred_bboxes, pred_classes):
@@ -194,6 +191,7 @@ for iter in range(1, MAX_ITERATION + 1):
                 cv2.putText(image, string, (xmin, ymin - 10), 1, 1, (0, 255, 0))
                 cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
+            image = cv2.resize(image, (SAMPLE_IMAGE_WIDTH, SAMPLE_IMAGE_HEIGHT))
             sample_images.append(image.copy())
         
         image_summary = sess.run(log_image_op, feed_dict = {log_image_var : sample_images})
