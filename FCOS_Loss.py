@@ -20,7 +20,7 @@ def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
 
         # focal_loss = [BATCH_SIZE]
         focal_loss = tf.reduce_sum(tf.abs(focal_loss), axis = [1, 2])
-
+    
     return focal_loss
 
 '''
@@ -39,7 +39,7 @@ def GIoU(pred_bboxes, gt_bboxes):
 
         inter_w = tf.minimum(pred_l, gt_l) + tf.minimum(pred_r, gt_r)
         inter_h = tf.minimum(pred_t, gt_t) + tf.minimum(pred_b, gt_b)
-
+        
         inter = tf.maximum(inter_w * inter_h, 0.)
         union = pred_area + gt_area - inter
         

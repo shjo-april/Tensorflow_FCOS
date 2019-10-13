@@ -35,8 +35,7 @@ class FCOS_Utils:
     def Encode(self, gt_bboxes, gt_classes):
         # 1. prepare gt_bboxes (bboxes + classes) & pyramid_dictionary
         gt_bboxes = np.concatenate([gt_bboxes, gt_classes[:, np.newaxis]], axis = -1)
-        pyramid_dic = {'P%d'%level : [] for level in PYRAMID_LEVELS}
-        
+
         # 2. generate gt_bboxes, gt_classes and gt_centers.
         total_encode_bboxes = []
         total_encode_centers = []
@@ -47,7 +46,6 @@ class FCOS_Utils:
             pyramid_name = 'P{}'.format(PYRAMID_LEVELS[i])
             
             # get separate bboxes & centers
-            bboxes = np.asarray(pyramid_dic[pyramid_name], dtype = np.float32)
             centers = self.centers[pyramid_name].reshape((-1, 2))
             
             # create encode_bboxes, centers and classes.

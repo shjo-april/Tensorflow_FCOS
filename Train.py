@@ -100,7 +100,7 @@ pretrained_saver.restore(sess, './resnet_v1_model/resnet_v1_50.ckpt')
 # '''
 
 saver = tf.train.Saver(max_to_keep = 100)
-# saver.restore(sess, './model/FCOS_{}.ckpt'.format(115000))
+saver.restore(sess, './model/FCOS_{}.ckpt'.format(115000))
 
 learning_rate = INIT_LEARNING_RATE
 
@@ -122,7 +122,7 @@ for i in range(NUM_THREADS):
     train_thread.start()
     train_threads.append(train_thread)
 
-sample_data_list = train_data_list[:SAMPLE_ITERATION]
+sample_data_list = train_data_list[:SAMPLES]
 
 for iter in range(1, MAX_ITERATION + 1):
     if iter in DECAY_ITERATIONS:
@@ -173,14 +173,21 @@ for iter in range(1, MAX_ITERATION + 1):
 
     if iter % SAMPLE_ITERATION == 0:
         sample_images = []
-        for data in sample_data_list:
+        batch_image_data = np.zeros((BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL), dtype = np.float32)
+
+        for i, data in enumerate(sample_data_list):
             image_name, gt_bboxes, gt_classes = data
 
             image = cv2.imread(TRAIN_DIR + image_name)
             tf_image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
 
-            total_pred_bboxes, total_pred_centers, total_pred_classes = sess.run([pred_bboxes_op, pred_centers_op, pred_classes_op], feed_dict = {input_var : [tf_image], is_training : False})
-            pred_bboxes, pred_classes = fcos_utils.Decode(total_pred_bboxes[0], total_pred_centers[0], total_pred_classes[0], [IMAGE_WIDTH, IMAGE_HEIGHT], detect_threshold = 0.5)
+            batch_image_data[i] = tf_image.copy()
+        
+        total_pred_bboxes, total_pred_centers, total_pred_classes = sess.run([pred_bboxes_op, pred_centers_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
+
+        for i in range(BATCH_SIZE):
+            image = batch_image_data[i]
+            pred_bboxes, pred_classes = fcos_utils.Decode(total_pred_bboxes[i], total_pred_centers[i], total_pred_classes[i], [IMAGE_WIDTH, IMAGE_HEIGHT], detect_threshold = 0.20)
             
             for bbox, class_index in zip(pred_bboxes, pred_classes):
                 xmin, ymin, xmax, ymax = bbox[:4].astype(np.int32)

@@ -98,12 +98,11 @@ def FCOS_Decode_Layer(pred_bboxes, decode_centers):
 
 def FCOS_ResNet_50(input_var, is_training, reuse = False):
     # convert BGR -> RGB
-    x = input_var[..., ::-1]
+    x = input_var[..., ::-1] - MEAN
 
-    # ResNetv2-50 (ImageNet)
-    x -= MEAN
+    # ResNetv1-50 (ImageNet)
     with tf.contrib.slim.arg_scope(resnet_v1.resnet_arg_scope()):
-        logits, end_points = resnet_v1.resnet_v1_50(x, is_training = is_training, reuse = reuse)
+        logits, end_points = resnet_v1.resnet_v1_50(x, is_training = False, reuse = reuse)
     
     # for key in end_points.keys():
     #     print(key, end_points[key])
@@ -126,7 +125,7 @@ def FCOS_ResNet_50(input_var, is_training, reuse = False):
     with tf.variable_scope('FCOS', reuse = reuse):
         x = conv_gn_relu(pyramid_dic['C5'], 256, (1, 1), 1, 'valid', is_training, 'P5_conv')
         pyramid_dic['P5'] = x
-
+        
         x = conv_gn_relu(x, 256, (3, 3), 2, 'same', is_training, 'P6_conv')
         pyramid_dic['P6'] = x
         
